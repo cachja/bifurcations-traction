@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import linregress
 
-
 def my_L2projection_bndry(n, V):
     u = fd.TrialFunction(V)
     v = fd.TestFunction(V)
@@ -360,7 +359,7 @@ def create_boundary_layer_submesh(mother_mesh, boundary_index=5, new_boundary_in
     return submesh
 
 
-def turek_computational_interpolation_hierarchy(ngmsh, max_ref):
+def turek_computational_interpolation_hierarchy_former(ngmsh, max_ref):
     ngmsh.SetGeometry(None)
     hierarchy = [fd.Mesh(ngmsh)]
     interpolation_hierarchy = []
@@ -375,3 +374,29 @@ def turek_computational_interpolation_hierarchy(ngmsh, max_ref):
         subhierarchy.append(fd.Mesh(create_boundary_layer_submesh(ngmsh)))
 
     return (hierarchy, interpolation_hierarchy, subhierarchy)
+
+def turek_computational_interpolation_hierarchy(ngmsh, max_ref):
+    hierarchy = []
+    interpolation_hierarchy = []
+    subhierarchy = [fd.Mesh(create_boundary_layer_submesh(ngmsh))]
+
+    for i in range(max_ref):
+        ngmsh.Refine()
+        interpolation_hierarchy.append(
+            fd.Mesh(create_boundary_layer_submesh(ngmsh),comm=fd.COMM_WORLD))
+        hierarchy.append(fd.Mesh(fd.Mesh(ngmsh,comm=fd.COMM_WORLD).curve_field(2)))
+        subhierarchy.append(fd.Mesh(create_boundary_layer_submesh(ngmsh)))
+
+    return (hierarchy, interpolation_hierarchy, subhierarchy)
+
+def generate_ngmesh_spline():
+    from netgen.geom2d import SplineGeometry
+    import netgen
+    if fd.COMM_WORLD.rank == 0:
+        geo = SplineGeometry()
+        geo.AddRectangle( (0, 0), (2.2, 0.41), bcs = (2, 3, 2, 1))
+        geo.AddCircle ( (0.2, 0.2), r=0.05, leftdomain=0, rightdomain=1, bc=5)#, maxh = 0.01
+        ngmesh = geo.GenerateMesh(maxh=0.2)
+    else:
+        ngmesh = netgen.libngpy._meshing.Mesh(2)
+    return ngmesh

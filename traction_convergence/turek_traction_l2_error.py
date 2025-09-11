@@ -29,16 +29,18 @@ circle_init = 8  # init. nb. of points on circle bndry
 max_ref = 5  # depth of mesh hierarchy
 max_ref = int(os.getenv("MAX_REF", str(max_ref)))
 
-ngmsh, circle_points = turek_traction_utils.generate_ngmesh_manual(circle_init)
+_, circle_points = turek_traction_utils.generate_ngmesh_manual(circle_init)
+ngmsh = turek_traction_utils.generate_ngmesh_spline()
 assert circle_init % 8 == 0, "circle_init must be divisible by 8"
 circle_points = circle_points[::circle_init // 8]
 subngmsh = turek_traction_utils.create_boundary_layer_submesh(ngmsh)
 # fd.info(f"{circle_points=}")  # In these points we output pointwise traction values
 
-mesh = fd.Mesh(ngmsh)
+mesh = fd.Mesh(fd.Mesh(ngmsh,comm=fd.COMM_WORLD).curve_field(2))#fd.Mesh(ngmsh)
 submesh = fd.Mesh(subngmsh)
 hierarchy, interpolation_hierarchy, subhierarchy = turek_traction_utils.turek_computational_interpolation_hierarchy(
     ngmsh, max_ref)
+hierarchy.insert(0, mesh)
 
 # Create function spaces on hierarchies beforehand
 interpolation_hierarchy_space_CG1 = []
@@ -147,26 +149,21 @@ def setup_problem(mesh, ref_level):
 ################## disrete variational traction ##########################
 def compute_traction(submesh, mesh, v, p, ref_level):
     # Build spaces for traction (linear problem)
-    V = fd.VectorFunctionSpace(submesh, "CG", 1)  # Mind the degree
-    V2 = fd.VectorFunctionSpace(submesh, "CG", 2)
-    VQ = fd.FunctionSpace(submesh, "CG", 1)
+    V = fd.VectorFunctionSpace(mesh, "CG", 1)  # Mind the degree
     g = fd.TrialFunction(V)
     g_ = fd.TestFunction(V)
     fd.info(f"{V.dim()=}")
 
     # set BC
-    bc_list = [6]  # zero traction on bndries not touching bndry of interest
+    bc_list = [1,2,3]  # zero traction on bndries not touching bndry of interest
     bc_num = 5  # circle bndry - here we solve PS
     bcs_g = [fd.DirichletBC(V, fd.Constant((0, 0)), i) for i in bc_list]
 
     # Define the bilinear form for disrete variational traction problem
     a_g = fd.inner(g, g_) * fd.ds(bc_num)
-    L_g = F1(fd.assemble(fd.interpolate(v, V2)),
-             fd.assemble(fd.interpolate(p, VQ)), g_)
-    v = fd.assemble(fd.interpolate(v, V2))
-    p = fd.assemble(fd.interpolate(p, VQ))
-    mesh = submesh
-
+    L_g = F1(v,
+             p, g_)
+    
     # Solve linear system
     gg = fd.Function(V)
     A = fd.assemble(a_g, bcs=bcs_g)
