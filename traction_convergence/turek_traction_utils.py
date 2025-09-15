@@ -375,7 +375,7 @@ def turek_computational_interpolation_hierarchy_former(ngmsh, max_ref):
 
     return (hierarchy, interpolation_hierarchy, subhierarchy)
 
-def turek_computational_interpolation_hierarchy(ngmsh, max_ref):
+def turek_computational_interpolation_hierarchy(ngmsh, max_ref, order):
     hierarchy = []
     interpolation_hierarchy = []
     subhierarchy = [fd.Mesh(create_boundary_layer_submesh(ngmsh))]
@@ -383,8 +383,11 @@ def turek_computational_interpolation_hierarchy(ngmsh, max_ref):
     for i in range(max_ref):
         ngmsh.Refine()
         interpolation_hierarchy.append(
-            fd.Mesh(create_boundary_layer_submesh(ngmsh),comm=fd.COMM_WORLD))
-        hierarchy.append(fd.Mesh(fd.Mesh(ngmsh,comm=fd.COMM_WORLD).curve_field(2)))
+            fd.Mesh(create_boundary_layer_submesh(ngmsh), comm=fd.COMM_WORLD))
+        fdmesh = fd.Mesh(ngmsh, comm=fd.COMM_WORLD)
+        cf = fdmesh.curve_field(order)
+        mesh = fd.Mesh(cf)
+        hierarchy.append(mesh)
         subhierarchy.append(fd.Mesh(create_boundary_layer_submesh(ngmsh)))
 
     return (hierarchy, interpolation_hierarchy, subhierarchy)

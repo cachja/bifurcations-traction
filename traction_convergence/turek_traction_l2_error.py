@@ -28,6 +28,8 @@ stokes = os.getenv("STOKES", str(stokes)) == "True"
 circle_init = 8  # init. nb. of points on circle bndry
 max_ref = 5  # depth of mesh hierarchy
 max_ref = int(os.getenv("MAX_REF", str(max_ref)))
+order = 2  # geometry approximation order
+order = int(os.getenv("ORDER", str(order)))
 
 _, circle_points = turek_traction_utils.generate_ngmesh_manual(circle_init)
 ngmsh = turek_traction_utils.generate_ngmesh_spline()
@@ -36,10 +38,12 @@ circle_points = circle_points[::circle_init // 8]
 subngmsh = turek_traction_utils.create_boundary_layer_submesh(ngmsh)
 # fd.info(f"{circle_points=}")  # In these points we output pointwise traction values
 
-mesh = fd.Mesh(fd.Mesh(ngmsh,comm=fd.COMM_WORLD).curve_field(2))#fd.Mesh(ngmsh)
+fdmesh = fd.Mesh(ngmsh, comm=fd.COMM_WORLD)
+cf = fdmesh.curve_field(order)
+mesh = fd.Mesh(cf)
 submesh = fd.Mesh(subngmsh)
-hierarchy, interpolation_hierarchy, subhierarchy = turek_traction_utils.turek_computational_interpolation_hierarchy(
-    ngmsh, max_ref)
+hierarchy, interpolation_hierarchy, subhierarchy = \
+    turek_traction_utils.turek_computational_interpolation_hierarchy(ngmsh, max_ref, order)
 hierarchy.insert(0, mesh)
 
 # Create function spaces on hierarchies beforehand
