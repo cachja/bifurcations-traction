@@ -1,5 +1,6 @@
 import firedrake as fd
 from firedrake.petsc import PETSc
+from firedrake.__future__ import interpolate
 import turek_traction_utils
 import warnings
 import numpy as np
@@ -38,9 +39,10 @@ circle_points = circle_points[::circle_init // 8]
 subngmsh = turek_traction_utils.create_boundary_layer_submesh(ngmsh)
 # fd.info(f"{circle_points=}")  # In these points we output pointwise traction values
 
-fdmesh = fd.Mesh(ngmsh, comm=fd.COMM_WORLD)
-cf = fdmesh.curve_field(order)
-mesh = fd.Mesh(cf)
+mesh = fd.Mesh(ngmsh, comm=fd.COMM_WORLD)
+if order > 1:
+    cf = mesh.curve_field(order)
+    mesh = fd.Mesh(cf)
 submesh = fd.Mesh(subngmsh)
 hierarchy, interpolation_hierarchy, subhierarchy = \
     turek_traction_utils.turek_computational_interpolation_hierarchy(ngmsh, max_ref, order)
@@ -215,8 +217,8 @@ def compute_traction(submesh, mesh, v, p, ref_level):
         ((x[0]-0.2)**2+(x[1]-0.2)**2)**0.5  # 0.05
 
     # We compute dimensionless drag and lift (2 / U**2 / L * drag)
-    g_tnds_DG1_analN = fd.interpolate(
-        force(v, p, n), fd.VectorFunctionSpace(mesh, "DG", 1))
+    g_tnds_DG1_analN = fd.assemble(interpolate(
+        force(v, p, n), fd.VectorFunctionSpace(mesh, "DG", 1)))
     g_tnds_DG1_analN.rename("traction_interpolated_CG1_analN")
     dragTndS_analN = fd.assemble(-2.0/(0.2*0.2*0.1)
                                  * force(v, p, n)[0]*fd.ds(bc_num))
@@ -236,8 +238,8 @@ def compute_traction(submesh, mesh, v, p, ref_level):
     n_DG0_error = fd.sqrt(fd.assemble(fd.inner(n-n_DG0, n-n_DG0)*fd.ds(5)))
     fd.info(f"{n_DG0_error=}")
 
-    g_tnds_DG1_DG0n = fd.interpolate(
-        force(v, p, n_DG0), fd.VectorFunctionSpace(mesh, "DG", 1))
+    g_tnds_DG1_DG0n = fd.assemble(interpolate(
+        force(v, p, n_DG0), fd.VectorFunctionSpace(mesh, "DG", 1)))
     g_tnds_DG1_DG0n.rename("traction_interpolated_CG1_DG0n")
     dragTndS_DG0n = fd.assemble(-2.0/(0.2*0.2*0.1)
                                 * force(v, p, n_DG0)[0]*fd.ds(bc_num))
@@ -255,8 +257,8 @@ def compute_traction(submesh, mesh, v, p, ref_level):
     n_CG1_error = fd.sqrt(fd.assemble(fd.inner(n-n_CG1, n-n_CG1)*fd.ds(5)))
     fd.info(f"{n_CG1_error=}")
 
-    g_tnds_DG1_CG1n = fd.interpolate(
-        force(v, p, n_CG1), fd.VectorFunctionSpace(mesh, "DG", 1))
+    g_tnds_DG1_CG1n = fd.assemble(interpolate(
+        force(v, p, n_CG1), fd.VectorFunctionSpace(mesh, "DG", 1)))
     g_tnds_DG1_CG1n.rename("traction_interpolated_CG1_CG1n")
     dragTndS_CG1n = fd.assemble(-2.0/(0.2*0.2*0.1)
                                 * force(v, p, n_CG1)[0]*fd.ds(bc_num))
@@ -415,7 +417,7 @@ def interpolate_to_get_L2norm_error_iterative(traction_fun_list, error_list, lis
             else:
                 raise ValueError(f"Unexpected list name: {list_name}")
 
-            t_h_refined = fd.interpolate(t_h, V_new)
+            t_h_refined = fd.assemble(interpolate(t_h, V_new))
 
             turek_traction_utils.move_boundary_to_circle_firedrake(refined_mesh)
             t_h_refined_moved = fd.Function(fd.functionspaceimpl.WithGeometry.create(
@@ -423,13 +425,13 @@ def interpolate_to_get_L2norm_error_iterative(traction_fun_list, error_list, lis
 
             t_h = t_h_refined_moved
 
-        # At the end we interpolate on the fine-grid reference mesh,
-        # although t_h already lives on the exact same mesh but not
-        # on the same "firedrake mesh object".
-        t_h = fd.interpolate(t_h, traction_fun_list_last.function_space())
+        # This should be no-op: transfer t_ref to the boundary-adjacent cells
+        # mesh. To be sure, we could keep t_ref and instead set the integration
+        # domain properly.
+        _t_ref = interpolate(t_ref, t_h.function_space())
+
         fd.info("Traction interpolated")
-        L2normError = fd.sqrt(fd.assemble(
-            fd.inner(t_h-t_ref, t_h-t_ref)*fd.ds(bc_num)))
+        L2normError = fd.assemble(fd.inner(t_h-_t_ref, t_h-_t_ref)*fd.ds(bc_num)) ** 0.5
         fd.info(f"{list_name}={L2normError}")
         error_list.append(L2normError)
 

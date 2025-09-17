@@ -4,13 +4,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import linregress
 
+
 def my_L2projection_bndry(n, V):
     u = fd.TrialFunction(V)
     v = fd.TestFunction(V)
     a = fd.inner(u, v)*fd.ds
-    l = fd.inner(n, v)*fd.ds
+    L = fd.inner(n, v)*fd.ds
     A = fd.assemble(a)
-    L = fd.assemble(l)
+    b = fd.assemble(L)
 
     diagonal = A.petscmat.getDiagonal()
     vals = diagonal.array
@@ -18,8 +19,8 @@ def my_L2projection_bndry(n, V):
     A.petscmat.setDiagonal(diagonal, PETSc.InsertMode.INSERT_VALUES)
 
     nh = fd.Function(V)
+    fd.solve(A, nh, b)
 
-    fd.solve(A, nh.vector(), L)
     return nh
 
 
@@ -384,9 +385,10 @@ def turek_computational_interpolation_hierarchy(ngmsh, max_ref, order):
         ngmsh.Refine()
         interpolation_hierarchy.append(
             fd.Mesh(create_boundary_layer_submesh(ngmsh), comm=fd.COMM_WORLD))
-        fdmesh = fd.Mesh(ngmsh, comm=fd.COMM_WORLD)
-        cf = fdmesh.curve_field(order)
-        mesh = fd.Mesh(cf)
+        mesh = fd.Mesh(ngmsh, comm=fd.COMM_WORLD)
+        if order > 1:
+            cf = mesh.curve_field(order)
+            mesh = fd.Mesh(cf)
         hierarchy.append(mesh)
         subhierarchy.append(fd.Mesh(create_boundary_layer_submesh(ngmsh)))
 
