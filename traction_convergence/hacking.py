@@ -166,6 +166,8 @@ def compute_traction(Vt, w):
 
 def run_regular_refinement(h_initial, num_refinements, order, family):
 
+    convergence_data = []
+
     def solve_step(ngmsh, w_old=None):
         mesh = generate_mesh(ngmsh, order)
         submesh = extract_cylinder_submesh(mesh)
@@ -176,7 +178,8 @@ def run_regular_refinement(h_initial, num_refinements, order, family):
         solve_navier_stokes(w)
         Vt = fd.VectorFunctionSpace(submesh, 'P', order)
         t = compute_traction(Vt, w)
-        report_traction(t, W)
+        errs = report_traction(t, W)
+        convergence_data.append((W.dim(), Vt.dim(), *errs))
         return w
 
     ngmsh = generate_ngmesh_spline(h_initial)
@@ -184,25 +187,39 @@ def run_regular_refinement(h_initial, num_refinements, order, family):
     for _ in range(num_refinements):
         ngmsh.Refine()
         w = solve_step(ngmsh, w_old=w)
+    return convergence_data
 
 
 def report_traction(t, W):
     drag = -2.0/(0.2*0.2*0.1) * fd.assemble(t[0]*fd.dx)
     lift = -2.0/(0.2*0.2*0.1) * fd.assemble(t[1]*fd.dx)
-    drag_ref = 5.57953523384   # Nabh
-    lift_ref = 0.010618948146  # Nabh
+    drag_nabh = 5.57953523384   # Nabh
+    drag_hron = 5.5795352338502 # Hron
+    lift_nabh = 0.010618948146  # Nabh
+    lift_hron = 0.0106189481265 # Hron
     fd.info(f"dim(W)={W.dim()} {drag=:.16} {lift=:.16} "
-            f"err_drag={drag-drag_ref} err_lift={lift-lift_ref}")
+            f"err_drag={drag_nabh-drag} {drag_hron-drag} "
+            f"err_lift={lift_nabh-lift} {lift_hron-lift}")
+    return drag_nabh-drag, drag_hron-drag, lift_nabh-lift, lift_hron-lift
+
+
+def postprocess_convergence_data(data):
+    data = np.array(data)
+    h = data[:, (0,)]**-0.5
+    errs = np.abs(data[:, 2:])
+    rates = np.log(errs[1:,:]/errs[:-1,:]) / np.log(h[1:]/h[:-1])
+    fd.info(f"Convergence rates:\n{rates}")
 
 
 def main():
     h_initial = 1.0
-    num_refinements = 2
-    order = 7
+    num_refinements = 4
+    order = 2
     family = 'TH'
     fd.set_log_level(fd.INFO)
     warnings.filterwarnings('ignore', message='The symbolic `interpolate` has been moved')
-    run_regular_refinement(h_initial, num_refinements, order, family)
+    convergence_data = run_regular_refinement(h_initial, num_refinements, order, family)
+    postprocess_convergence_data(convergence_data)
 
 
 if __name__ == '__main__':
