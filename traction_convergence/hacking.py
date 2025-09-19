@@ -3,7 +3,7 @@ import netgen
 from netgen.geom2d import SplineGeometry
 import numpy as np
 
-import warnings
+from warnings import filterwarnings
 from time import time
 
 
@@ -52,8 +52,8 @@ def clamp_to_cylinder(mesh):
     mesh.clear_spatial_index()
 
 
-def reconstruct_function_space_on_affine_mesh(V):
-    element = V.mesh().ufl_coordinate_element().reconstruct(degree=1)
+def reconstruct_function_space_on_affine_mesh(V, family=None):
+    element = V.mesh().ufl_coordinate_element().reconstruct(degree=1, family=family)
     coord_space = fd.FunctionSpace(V.mesh(), element)
     coords = fd.assemble(fd.interpolate(V.mesh().coordinates, coord_space))
     mesh = fd.Mesh(coords)
@@ -167,6 +167,7 @@ def compute_traction(Vt, w):
 def run_regular_refinement(h_initial, num_refinements, order, family):
 
     convergence_data = []
+    solution_data = []
 
     def solve_step(ngmsh, w_old=None):
         mesh = generate_mesh(ngmsh, order)
@@ -180,6 +181,7 @@ def run_regular_refinement(h_initial, num_refinements, order, family):
         t = compute_traction(Vt, w)
         errs = report_traction(t, W)
         convergence_data.append((W.dim(), Vt.dim(), *errs))
+        solution_data.append((W.dim(), Vt.dim(), w, t))
         return w
 
     ngmsh = generate_ngmesh_spline(h_initial)
@@ -187,7 +189,7 @@ def run_regular_refinement(h_initial, num_refinements, order, family):
     for _ in range(num_refinements):
         ngmsh.Refine()
         w = solve_step(ngmsh, w_old=w)
-    return convergence_data
+    return convergence_data, solution_data
 
 
 def report_traction(t, W):
@@ -207,19 +209,47 @@ def postprocess_convergence_data(data):
     data = np.array(data)
     h = data[:, (0,)]**-0.5
     errs = np.abs(data[:, 2:])
-    rates = np.log(errs[1:,:]/errs[:-1,:]) / np.log(h[1:]/h[:-1])
+    rates = np.log(errs[1:, :]/errs[:-1, :]) / np.log(h[1:]/h[:-1])
     fd.info(f"Convergence rates:\n{rates}")
+
+
+def transfer_traction_to_interval(t):
+    V = t.function_space()
+    # TODO: Perhaps we could unwind t directly on the curved mesh?
+    #       And have better accuracy?
+    V = reconstruct_function_space_on_affine_mesh(V, family='DP')
+    coords = V.mesh().coordinates.dat.data
+    coords[:, 0] = np.atan2(coords[:, 1] - 0.2, coords[:, 0] - 0.2)
+    coords[:, 1] = 0
+    V.mesh().clear_spatial_index()
+    return fd.Function(V, val=t.dat)
+
+
+def postprocess_solution_data(data):
+    t_fine = transfer_traction_to_interval(data[-1][3])
+    convergence = []
+    for i, (dim_vp, dim_t, _, t) in enumerate(data[:-1]):
+        t_coarse = transfer_traction_to_interval(t)
+        t_coarse = fd.interpolate(t_coarse, t_fine.function_space())
+        mesh_fine = t_fine.function_space().mesh()
+        err_t = fd.inner(t_fine-t_coarse, t_fine-t_coarse)*fd.dx(domain=mesh_fine)
+        err_t = fd.assemble(err_t) ** 0.5
+        fd.info(f"Traction L2 error level {i}: {err_t}")
+        convergence.append((dim_vp, dim_t, err_t))
+    postprocess_convergence_data(convergence)
 
 
 def main():
     h_initial = 1.0
-    num_refinements = 4
+    num_refinements = 3
     order = 2
     family = 'TH'
     fd.set_log_level(fd.INFO)
-    warnings.filterwarnings('ignore', message='The symbolic `interpolate` has been moved')
-    convergence_data = run_regular_refinement(h_initial, num_refinements, order, family)
+    filterwarnings('ignore', message='The symbolic `interpolate` has been moved')
+    convergence_data, solution_data = run_regular_refinement(h_initial,
+        num_refinements, order, family)
     postprocess_convergence_data(convergence_data)
+    postprocess_solution_data(solution_data)
 
 
 if __name__ == '__main__':
