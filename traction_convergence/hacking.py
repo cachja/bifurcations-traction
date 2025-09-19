@@ -4,14 +4,15 @@ from netgen.geom2d import SplineGeometry
 import numpy as np
 
 import warnings
+from time import time
 
 
-def generate_ngmesh_spline():
+def generate_ngmesh_spline(maxh):
     if fd.COMM_WORLD.rank == 0:
         geo = SplineGeometry()
         geo.AddRectangle((0, 0), (2.2, 0.41), bcs=(2, 3, 2, 1))
         geo.AddCircle ((0.2, 0.2), r=0.05, leftdomain=0, rightdomain=1, bc=5)
-        ngmesh = geo.GenerateMesh(maxh=0.2)
+        ngmesh = geo.GenerateMesh(maxh=maxh)
     else:
         ngmesh = netgen.libngpy._meshing.Mesh(2)
     return ngmesh
@@ -49,6 +50,40 @@ def clamp_to_cylinder(mesh):
         coords *= scale[:, None]
     mesh.coordinates.dat.data_wo[dofs, :] = coords + [0.2, 0.2]
     mesh.clear_spatial_index()
+
+
+def reconstruct_function_space_on_affine_mesh(V):
+    element = V.mesh().ufl_coordinate_element().reconstruct(degree=1)
+    coord_space = fd.FunctionSpace(V.mesh(), element)
+    coords = fd.assemble(fd.interpolate(V.mesh().coordinates, coord_space))
+    mesh = fd.Mesh(coords)
+    return V.reconstruct(mesh=mesh)
+
+
+def transfer_function(f_src, f_dest):
+
+    # Non-matching projection not implemented on curved meshes:
+    #
+    #   f_dest.sub(0).project(f_src.sub(0))
+    #   f_dest.sub(1).project(f_src.sub(1))
+    #
+    # Non-matching interpolation blows up with order (not sure whether
+    # the element order and/or the mesh order):
+    #
+    #   f_dest.interpolate(f_src)
+
+    # Hence move temporarily to affine mesh
+    W_src = reconstruct_function_space_on_affine_mesh(f_src.function_space())
+    W_dest = reconstruct_function_space_on_affine_mesh(f_dest.function_space())
+    # Following function share data with input functions
+    f_src = fd.Function(W_src, val=f_src.dat)
+    f_dest = fd.Function(W_dest, val=f_dest.dat)
+
+    # Actually transfer between meshes
+    # This is stll quite slow, but way faster than non-affine
+    t0 = time()
+    f_dest.interpolate(f_src)
+    fd.debug(f"non-matching interpolate time {time()-t0:.2f}s")
 
 
 def form_a(v, v_):
@@ -98,8 +133,8 @@ def solve_navier_stokes(w):
         'snes_monitor': None,
         'snes_converged_reason': None,
         'snes_max_it': 12,
-        'snes_rtol': 1e-11,
-        'snes_atol': 5e-10,
+        'snes_rtol': 1e-12,
+        'snes_atol': 1e-25,
         'snes_linesearch_type': 'basic',
         'ksp_type': 'preonly',
         'pc_type': 'lu',
@@ -107,7 +142,6 @@ def solve_navier_stokes(w):
     }
     solver = fd.NonlinearVariationalSolver(problem, solver_parameters=param)
     solver.solve()
-    return w
 
 
 def compute_traction(Vt, w):
@@ -130,7 +164,7 @@ def compute_traction(Vt, w):
     return t
 
 
-def run_regular_refinement(num_refinements, order, family):
+def run_regular_refinement(h_initial, num_refinements, order, family):
 
     def solve_step(ngmsh, w_old=None):
         mesh = generate_mesh(ngmsh, order)
@@ -138,18 +172,18 @@ def run_regular_refinement(num_refinements, order, family):
         W = create_velocity_pressure_pair(mesh, family, order)
         w = fd.Function(W)
         if w_old is not None:
-            w.interpolate(w_old)
-        w = solve_navier_stokes(w)
+            transfer_function(w_old, w)
+        solve_navier_stokes(w)
         Vt = fd.VectorFunctionSpace(submesh, 'P', order)
         t = compute_traction(Vt, w)
         report_traction(t, W)
         return w
 
-    ngmsh = generate_ngmesh_spline()
+    ngmsh = generate_ngmesh_spline(h_initial)
     w = solve_step(ngmsh, w_old=None)
     for _ in range(num_refinements):
         ngmsh.Refine()
-        w = solve_step(ngmsh, w)
+        w = solve_step(ngmsh, w_old=w)
 
 
 def report_traction(t, W):
@@ -162,12 +196,13 @@ def report_traction(t, W):
 
 
 def main():
-    num_refinements = 3
-    order = 5
+    h_initial = 1.0
+    num_refinements = 2
+    order = 7
     family = 'TH'
     fd.set_log_level(fd.INFO)
     warnings.filterwarnings('ignore', message='The symbolic `interpolate` has been moved')
-    run_regular_refinement(num_refinements, order, family)
+    run_regular_refinement(h_initial, num_refinements, order, family)
 
 
 if __name__ == '__main__':
