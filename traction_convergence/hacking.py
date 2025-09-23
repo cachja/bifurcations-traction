@@ -148,7 +148,7 @@ def create_velocity_pressure_pair(mesh, family, degree):
     return W
 
 
-def solve_navier_stokes(w):
+def solve_navier_stokes(w, **kwargs):
     W = w.function_space()
     x = fd.SpatialCoordinate(W.mesh())
     v_in = fd.as_vector([4.0*0.3*x[1]*(0.41-x[1])/0.41/0.41, 0])
@@ -174,6 +174,7 @@ def solve_navier_stokes(w):
         'pc_type': 'lu',
         'pc_factor_mat_solver_type': 'mumps',
     }
+    param.update(kwargs)
     solver = fd.NonlinearVariationalSolver(problem, solver_parameters=param)
     solver.solve()
 
@@ -298,11 +299,15 @@ def transfer_traction_to_interval_2(t):
     return fd.Function(V, val=t.dat)
 
 
-def postprocess_solution_data(data, map_traction):
+def postprocess_solution_data(data, t_fine, map_traction):
 
-    t_fine = map_traction(data[-1][3])
+    if t_fine is None:
+        t_fine = data[-1][3]
+        data = data[:-1]
+
+    t_fine = map_traction(t_fine)
     convergence = []
-    for i, (dim_vp, dim_t, _, t) in enumerate(data[:-1]):
+    for i, (dim_vp, dim_t, _, t) in enumerate(data):
         t_coarse = map_traction(t)
         t_coarse = fd.assemble(fd.interpolate(t_coarse, t_fine.function_space()))
         mesh_fine = t_fine.function_space().mesh()
@@ -314,18 +319,69 @@ def postprocess_solution_data(data, map_traction):
     postprocess_convergence_data(convergence)
 
 
+def fetch_fine_solution():
+    try:
+        with fd.CheckpointFile('traction_fine.h5', 'r') as f:
+            mesh = f.load_mesh('mesh_t')
+            t = f.load_function(mesh, 't')
+        fd.info("Loaded fine solution from traction_fine.h5")
+    except fd.PETSc.Error:
+        fd.info("Computing fine solution for the first time")
+        t = compute_fine_solution()
+        t.function_space().mesh().name = 'mesh_t'
+        t.rename('t')
+        with fd.CheckpointFile('traction_fine.h5', 'w') as f:
+            f.save_mesh(t.function_space().mesh())
+            f.save_function(t)
+        fd.info("Saved fine solution to traction_fine.h5")
+    return t
+
+
+def compute_fine_solution():
+    h_initial = 1.0
+    num_refinements = 3
+    order = 8
+    family = 'TH'
+
+    ngmsh = generate_ngmesh_spline(h_initial)
+    for i in range(num_refinements):
+        fd.info(f'Refining {i+1}/{num_refinements}')
+        ngmsh.Refine()
+    mesh = generate_mesh(ngmsh, order)
+    fd.info(f'Mesh: {[mesh.num_entities(d) for d in [0,1,2]]=}')
+    fd.info(f'Mesh coordinate space dim: {mesh.coordinates.function_space().dim()=}')
+
+    submesh = extract_cylinder_submesh(mesh)
+    W = create_velocity_pressure_pair(mesh, family, order)
+    w = fd.Function(W)
+    solve_navier_stokes(w, snes_rtol=1e-18)
+    Vt = fd.VectorFunctionSpace(submesh, 'P', order)
+    t = compute_traction(Vt, w)
+
+    fd.info("Babuska-Miller trick:")
+    drag, lift = compute_integral_traction_babuska(w)
+    errs = report_traction(W.dim(), drag, lift)
+
+    fd.info("Integrate pointwise traction:")
+    drag, lift = compute_integral_traction_from_pointwise_traction(t)
+    errs2 = report_traction(W.dim(), drag, lift)
+
+    return t
+
+
 def main():
     h_initial = 1.0
     num_refinements = 4
-    order = 4
+    order = 3
     family = 'TH'
     fd.set_log_level(fd.DEBUG)
     filterwarnings('ignore', message='The symbolic `interpolate` has been moved')
+    t_fine = fetch_fine_solution()
     convergence_data, solution_data = run_regular_refinement(h_initial,
         num_refinements, order, family)
     postprocess_convergence_data(convergence_data)
-    postprocess_solution_data(solution_data, transfer_traction_to_interval)
-    postprocess_solution_data(solution_data, transfer_traction_to_interval_2)
+    postprocess_solution_data(solution_data, t_fine, transfer_traction_to_interval)
+    postprocess_solution_data(solution_data, t_fine, transfer_traction_to_interval_2)
 
 
 if __name__ == '__main__':
