@@ -243,10 +243,16 @@ def compute_integral_traction_babuska(w):
     v, p = w.subfunctions
     v_, p_ = w_.subfunctions
     L = form_a(v, v_) - form_b(p, v_)
+
+    deg = w.function_space().ufl_element().degree()
+    fc_param = {'quadrature_degree': 5*deg-3}
+
     fd.DirichletBC(w_.function_space().sub(0), (1, 0), 5).apply(w_)
-    drag = -2.0/(0.2*0.2*0.1) * fd.assemble(L)
+    drag = -2.0/(0.2*0.2*0.1) * fd.assemble(L, form_compiler_parameters=fc_param)
+
     fd.DirichletBC(w_.function_space().sub(0), (0, 1), 5).apply(w_)
-    lift = -2.0/(0.2*0.2*0.1) * fd.assemble(L)
+    lift = -2.0/(0.2*0.2*0.1) * fd.assemble(L, form_compiler_parameters=fc_param)
+
     return drag, lift
 
 
@@ -339,7 +345,7 @@ def fetch_fine_solution():
 
 def compute_fine_solution():
     h_initial = 1.0
-    num_refinements = 3
+    num_refinements = 4
     order = 8
     family = 'TH'
 
